@@ -1,0 +1,305 @@
+---
+title: "NLP Final Project"
+author: "Wanying Wang"
+date: "4/25/2019"
+output: html_document
+---
+```{r}
+# read in the data
+library(readr)
+reviews <- read.csv("sephora_reviews_final.csv")
+head(reviews)
+```
+
+## Comparison Wordcloud
+```{r}
+# filter three kind of reviews
+library(dplyr)
+five_star <- reviews %>%
+  filter(rating == 5) %>%
+  head(5000)
+
+one_star <- reviews %>%
+  filter(rating == 1 | rating == 2) %>%
+  head(5000)
+```
+
+```{r}
+# make text vector
+five_star$review_text <- as.character(five_star$review_text)
+one_star$review_text <- as.character(one_star$review_text)
+
+five_text <-c()
+one_text <- c()
+
+for(i in 1:length(five_star$review_text)){
+  five_text <-c(five_text,five_star$review_text[i])
+}
+
+for(i in 1:length(one_star$review_text)){
+  one_text <-c(one_text,one_star$review_text[i])
+}
+```
+
+```{r}
+# concatenate two texts together
+two_doc <- c(paste(five_text, collapse=" "),paste(one_text, collapse=" "))
+```
+
+```{r}
+# create corpus
+library(tm)
+two_source <- VectorSource(two_doc)
+two_corpus <- VCorpus(two_source)
+two_corpus
+```
+
+```{r}
+# label the corpus
+document_label <- c("Five Star Ratings", "One Star Ratings")
+for (i in 1:2){
+  two_corpus[[i]]$meta$id <- as.character(document_label[i])
+}
+
+two_corpus <- as.VCorpus(two_corpus)
+```
+
+```{r}
+# corpus clean function
+removeNumPunct <- function(x){gsub("[^[:alpha:][:space:]]*", "", x)}
+removePattern <- function(x){gsub("\\b[A-Z]+\\b","",x)}
+
+
+clean_corpus <- function(corpus){
+  corpus <- tm_map(corpus, content_transformer(removePattern))
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, removeWords, c(stopwords("en"), 'foundation','skin', 'make', 'product', 'face', 'really', 'work', 'use', 'got', 'say', 'actually','using', 'used', 'one', 'two', 'three', 'four','five', 'definitely', 'absolutely', 'bought', 'found', 'still', 'makeup', 'made', 'will', 'though', 'little', 'find', 'seem', 'however', 'favorite', 'love', 'look', 'perfect','unfortunately', 'return', 'like','just', 'foundations' ))  
+  corpus <- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, content_transformer(removeNumPunct))
+  corpus <- tm_map(corpus, stripWhitespace)
+  return(corpus)
+}
+```
+
+```{r}
+# clean the corpus
+two_clean <- clean_corpus(two_corpus)
+```
+
+```{r}
+# create TermDocumentMatrix
+two_tdm <- TermDocumentMatrix(two_clean)
+two_matrix <- as.matrix(two_tdm)
+```
+
+```{r}
+# create comparison wordcloud
+library(wordcloud)
+png("Comparison Wordcloud.png")
+comparison.cloud(two_matrix, colors = c("pink", "lightblue"), 
+                 scale=c(0.1,2), title.size= 2, 
+                 max.words = 200)
+dev.off()
+```
+
+## Topic Modeling
+```{r}
+# create corpus
+five <- five_star %>%
+  select(doc_id = name, text = review_text)
+
+one <- one_star %>%
+  select(doc_id = name, text = review_text)
+
+df_source5 <- DataframeSource(five)
+df_corpus5 <- VCorpus(df_source5)
+
+df_source1 <- DataframeSource(one)
+df_corpus1 <- VCorpus(df_source1)
+```
+
+```{r}
+# clean the corpus
+five_clean <- clean_corpus(df_corpus5)
+one_clean <- clean_corpus(df_corpus1)
+```
+
+```{r}
+# create DocumentTermMatrix
+five_dtm <- DocumentTermMatrix(five_clean)
+one_dtm <- DocumentTermMatrix(one_clean)
+```
+
+```{r}
+# remove the document rows that are empty
+five_ui = unique(five_dtm$i)
+five_dtm.new = five_dtm[five_ui,]
+
+one_ui = unique(one_dtm$i)
+one_dtm.new = one_dtm[one_ui,]
+```
+
+
+```{r}
+# topic modeling
+library(topicmodels)
+five_lda <- LDA(five_dtm.new, k = 4, control = list(seed = 1234))
+one_lda <- LDA(one_dtm.new, k = 2, control = list(seed = 1234))
+```
+
+```{r}
+# prepare for the visualization
+library(tidytext)
+five_topics <- tidy(five_lda, matrix = "beta")
+
+five_top_terms <- five_topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+five_top_terms %>%
+  mutate(term = reorder(term, beta))
+```
+
+```{r} 
+# visualize the topic distribution of five star reviews
+png("Five Star Review Topic Modeling.png")
+(ggplot(data = five_top_terms, aes(reorder(term, beta), beta, fill = factor(topic))) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~ topic, scales = "free") +
+    xlab("word") +
+    coord_flip())
+dev.off()
+```
+
+```{r}
+# prepare for the visualization
+one_topics <- tidy(one_lda, matrix = "beta")
+
+one_top_terms <- one_topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+one_top_terms %>%
+  mutate(term = reorder(term, beta))
+```
+
+```{r}
+# visualize the topic distribution of one star reviews
+png("One Star Review Topic Modeling.png")
+(ggplot(data = one_top_terms, aes(reorder(term, beta), beta, fill = factor(topic))) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~ topic, scales = "free") +
+    coord_flip())
+dev.off()
+```
+
+
+## Cosine Similarity
+```{r}
+# concatenate the reviews for each foundation as "ingredients"
+foundation <- reviews %>%
+  group_by(name) %>%
+  summarise(ingredient = paste(review_text, collapse = ",")) %>%
+  select(name, ingredient)
+```
+
+```{r}
+# save the dataframe as csv file
+write.csv(foundation,'foundation.csv')
+```
+
+```{r}
+# read in the svd dataframe
+svd <- read.csv("svd.csv")
+svd$name <- as.character(svd$name)
+head(svd)
+```
+
+```{r}
+# complete the svd dataframe
+reviews$name <- as.character(reviews$name)
+complete_svd <- svd %>%
+  left_join(reviews, by="name") %>%
+  select(name, brand, rating, price, SVD1, SVD2)
+head(complete_svd)
+```
+
+```{r}
+# calculate the mean rating of each product
+mean_rating <- complete_svd %>%
+  group_by(name) %>%
+  summarise(rating = round(mean(rating)))
+```
+
+```{r}
+# the final dataframe
+deduped <- unique(complete_svd[ , c(1,2,4,5,6)])
+final_svd <- inner_join(deduped, mean_rating, by="name")
+```
+
+```{r}
+# save the dataframe as csv file
+write.csv(final_svd,'final svd.csv')
+```
+
+
+```{r}
+# visualize the similarity
+library(plotly)
+p1 <- plot_ly(data = final_svd,
+              x = ~SVD1,
+              y = ~SVD2,
+              marker = list(size = 10,color = 'rgba(255, 182, 193, .9)'),
+              hoverinfo = "text",
+              hovertext = paste("Brand:", final_svd$brand,
+                                "<br> Name:", final_svd$name,
+                                "<br> Rating:", final_svd$rating,
+                                "<br> Price: $", final_svd$price)) %>%
+  layout(title = 'Similarity Distribution of Foundations',
+         yaxis = list(zeroline = FALSE),
+         xaxis = list(zeroline = FALSE))
+
+chart_link = api_create(p1, filename = "Similarity Distribution of Foundations")
+chart_link
+```
+
+```{r}
+# plot the visualiztion of skin type by brand
+skin_type <- reviews %>%
+  group_by(brand, skin_type) %>%
+  summarise(count = n()) %>%
+  drop_na()
+
+```
+
+```{r}
+# reorder the brand by the total number of reviews
+sort_brand <- skin_type %>%
+  summarise(total = sum(count)) %>%
+  arrange(desc(total))
+```
+
+
+```{r}
+library(ggplot2) 
+png(filename="skin type distribution.png", width=1000, height=800)
+ggplot(skin_type, aes(x = reorder(brand,desc(count)), y = count, fill = skin_type)) +
+  geom_bar(stat="identity") +
+  theme(axis.text.x=element_text(angle = 90, hjust = 1)) +
+  ggtitle('Distribution of Skin Type per Brand by Reviews') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  xlab('Skin Type') + 
+  ylab('Count') +
+  labs(fill = 'Skin Type')
+
+dev.off()
+```
+
+```{r}
+unique(reviews$finish)
+```
+
